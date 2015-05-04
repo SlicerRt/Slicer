@@ -548,10 +548,12 @@ bool qMRMLSceneSubjectHierarchyModel::reparent(vtkMRMLNode* node, vtkMRMLNode* n
     selectedPlugin = qSlicerSubjectHierarchyPluginHandler::instance()->defaultPlugin();
     }
 
-  // If default plugin was chosen to reparent virtual node (a node in a virtual branch), then abort reparenting
-  // (it means that the actual owner plugin cannot reparent its own virtual node, so it then cannot be reparented).
-  if ( subjectHierarchyNode->GetParentNode()
-    && subjectHierarchyNode->GetParentNode()->GetAttribute(vtkMRMLSubjectHierarchyConstants::GetVirtualBranchSubjectHierarchyNodeAttributeName().c_str())
+  // If default plugin was chosen to reparent virtual node (a node in a virtual branch), or into a virtual branch,
+  // then abort reparenting (it means that the actual owner plugin cannot reparent its own virtual node, so it then
+  // cannot be reparented).
+  if ( ( newParent->GetAttribute(vtkMRMLSubjectHierarchyConstants::GetVirtualBranchSubjectHierarchyNodeAttributeName().c_str())
+      || ( subjectHierarchyNode->GetParentNode()
+        && subjectHierarchyNode->GetParentNode()->GetAttribute(vtkMRMLSubjectHierarchyConstants::GetVirtualBranchSubjectHierarchyNodeAttributeName().c_str()) ) )
     && selectedPlugin == qSlicerSubjectHierarchyPluginHandler::instance()->defaultPlugin() )
   {
     qCritical() << "qMRMLSceneSubjectHierarchyModel::reparent: Failed to reparent virtual node "
