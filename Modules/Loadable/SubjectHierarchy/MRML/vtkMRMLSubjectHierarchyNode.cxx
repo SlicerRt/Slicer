@@ -511,7 +511,10 @@ int vtkMRMLSubjectHierarchyNode::GetDisplayVisibilityForBranch()
     vtkMRMLDisplayableNode* displayableNode = vtkMRMLDisplayableNode::SafeDownCast(
       childDisplayableNodes->GetItemAsObject(childNodeIndex) );
     // Omit volume nodes from the process (they are displayed differently than every other type)
-    if (displayableNode && !displayableNode->IsA("vtkMRMLScalarVolumeNode"))
+    // TODO: This is not very elegant or safe, it would be better to distinguish between visibility modes, or overhaul the visibility features completely
+    if ( displayableNode
+      && ( !displayableNode->IsA("vtkMRMLVolumeNode")
+        || !strcmp(displayableNode->GetClassName(), "vtkMRMLSegmentationNode") ) )
       {
       // If we set visibility
       if (visible == -1)
@@ -754,11 +757,6 @@ vtkMRMLSubjectHierarchyNode* vtkMRMLSubjectHierarchyNode::CreateSubjectHierarchy
   if (level)
     {
     childSubjectHierarchyNode->SetLevel(level);
-    }
-  else
-    {
-    // Default level is series
-    childSubjectHierarchyNode->SetLevel(vtkMRMLSubjectHierarchyConstants::GetDICOMLevelSeries());
     }
 
   std::string shNodeName = nodeName + vtkMRMLSubjectHierarchyConstants::GetSubjectHierarchyNodeNamePostfix();
