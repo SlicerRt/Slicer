@@ -182,6 +182,7 @@ void qMRMLSliceControllerWidgetTester::testSetBackgroundVolume()
 
   QFETCH(QString, volumeNodeID);
   vtkMRMLNode* volumeNode = this->MRMLScene->GetNodeByID(volumeNodeID.toLatin1());
+  vtkMRMLNode* compositeNode=sliceControllerWidget.mrmlSliceCompositeNode();
   sliceControllerWidget.mrmlSliceCompositeNode()->SetBackgroundVolumeID(volumeNode ? volumeNode->GetID() : 0);
 
   QFETCH(QString, expectedVolumeNodeID);
@@ -203,7 +204,7 @@ void qMRMLSliceControllerWidgetTester::testSetBackgroundVolume_data()
   QTest::newRow("volume1") << "vtkMRMLScalarVolumeNode1" << "vtkMRMLScalarVolumeNode1";
   QTest::newRow("volume2") << "vtkMRMLScalarVolumeNode2" << "vtkMRMLScalarVolumeNode2";
   QTest::newRow("volume3") << "vtkMRMLScalarVolumeNode3" << "vtkMRMLScalarVolumeNode3";
-  QTest::newRow("labelmap1") << "vtkMRMLScalarVolumeNode4" << "vtkMRMLScalarVolumeNode4";
+  QTest::newRow("labelmap1") << "vtkMRMLLabelMapVolumeNode1" << "vtkMRMLLabelMapVolumeNode1";
 }
 
 // ----------------------------------------------------------------------------
@@ -235,7 +236,7 @@ void qMRMLSliceControllerWidgetTester::testSetForegroundVolume_data()
   QTest::newRow("volume1") << "vtkMRMLScalarVolumeNode1" << "vtkMRMLScalarVolumeNode1";
   QTest::newRow("volume2") << "vtkMRMLScalarVolumeNode2" << "vtkMRMLScalarVolumeNode2";
   QTest::newRow("volume3") << "vtkMRMLScalarVolumeNode3" << "vtkMRMLScalarVolumeNode3";
-  QTest::newRow("labelmap1") << "vtkMRMLScalarVolumeNode4" << "vtkMRMLScalarVolumeNode4";
+  QTest::newRow("labelmap1") << "vtkMRMLLabelMapVolumeNode1" << "vtkMRMLLabelMapVolumeNode1";
 }
 
 // ----------------------------------------------------------------------------
@@ -267,7 +268,7 @@ void qMRMLSliceControllerWidgetTester::testSetLabelVolume_data()
   QTest::newRow("volume1") << "vtkMRMLScalarVolumeNode1" << QString();
   QTest::newRow("volume2") << "vtkMRMLScalarVolumeNode2" << QString();
   QTest::newRow("volume3") << "vtkMRMLScalarVolumeNode3" << QString();
-  QTest::newRow("labelmap1") << "vtkMRMLScalarVolumeNode4" << "vtkMRMLScalarVolumeNode4";
+  QTest::newRow("labelmap1") << "vtkMRMLLabelMapVolumeNode1" << "vtkMRMLLabelMapVolumeNode1";
 }
 
 // ----------------------------------------------------------------------------
@@ -277,7 +278,7 @@ void qMRMLSliceControllerWidgetTester::testSetLabelVolumeWithNoLinkedControl()
   sliceControllerWidget.setMRMLScene(this->MRMLScene);
 
   vtkMRMLScalarVolumeNode* scalarVolumeNode =
-    vtkMRMLScalarVolumeNode::SafeDownCast(this->MRMLScene->GetNodeByID("vtkMRMLScalarVolumeNode4"));
+    vtkMRMLScalarVolumeNode::SafeDownCast(this->MRMLScene->GetNodeByID("vtkMRMLLabelMapVolumeNode1"));
   if (scalarVolumeNode)
     {
     sliceControllerWidget.mrmlSliceCompositeNode()->SetLabelVolumeID(scalarVolumeNode->GetID());
