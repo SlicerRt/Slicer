@@ -6,6 +6,8 @@ from __main__ import vtk
 from __main__ import slicer
 import ColorBox
 import EditUtil
+# import MergeLabelMapBox
+# import SegmentationBox
 
 #########################################################
 #
@@ -32,6 +34,9 @@ class HelperBox(object):
     self.masterWhenMergeWasSet = None
     # string
     self.createMergeOptions = ""
+    self.mergeNodeName = ""
+    self.mergeVolumePostfix = "-label"
+    self.segmentationPostfix = "-segmentation"
     # pairs of (node instance, observer tag number)
     self.observerTags = []
     # instance of a ColorBox
@@ -45,7 +50,7 @@ class HelperBox(object):
     self.items = []
     self.brushes = []
     # widgets that are dynamically created on demand
-    self.colorSelect = None
+    self.labelCreate = None
     self.labelSelect = None
     self.labelSelector = None
     # pseudo signals
@@ -84,7 +89,7 @@ class HelperBox(object):
   def newMerge(self):
     """create a merge volume for the current master even if one exists"""
     self.createMergeOptions = "new"
-    self.colorSelectDialog()
+    self.labelCreateDialog()
 
   def createMerge(self):
     """create a merge volume for the current master"""
@@ -92,8 +97,6 @@ class HelperBox(object):
       # should never happen
       self.errorDialog( "Cannot create merge volume without master" )
 
-    masterName = self.master.GetName()
-    mergeName = masterName + "-label"
     if self.createMergeOptions.find("new") >= 0:
       merge = None
     else:
@@ -101,8 +104,8 @@ class HelperBox(object):
     self.createMergeOptions = ""
 
     if not merge:
-      merge = self.volumesLogic.CreateAndAddLabelVolume( slicer.mrmlScene, self.master, mergeName )
-      merge.GetDisplayNode().SetAndObserveColorNodeID( self.colorSelector.currentNodeID )
+      merge = self.volumesLogic.CreateAndAddLabelVolume( slicer.mrmlScene, self.master, self.mergeNodeName )
+      merge.GetDisplayNode().SetAndObserveColorNodeID( self.labelCreator.currentNodeID )
       self.setMergeVolume( merge )
     self.select(mergeVolume=merge)
 
@@ -131,7 +134,7 @@ class HelperBox(object):
       # the master exists, but there is no merge volume yet
       # bring up dialog to create a merge with a user-selected color node
       if self.master:
-        self.colorSelectDialog()
+        self.labelCreateDialog()
 
     self.mergeName.setText( mergeText )
     self.updateStructures()
@@ -198,738 +201,99 @@ class HelperBox(object):
     # otherwise pick the merge based on the master name
     # - either return the merge volume or empty string
     masterName = self.master.GetName()
-    mergeName = masterName+"-label"
+    mergeName = masterName+self.mergeVolumePostfix
     self.merge = self.getNodeByName( mergeName, className=self.master.GetClassName() )
     return self.merge
 
-  def structureVolume(self,structureName):
-    """select structure volume"""
-    if not self.master:
-      return None
-    masterName = self.master.GetName()
-    structureVolumeName = masterName+"-%s-label"%structureName
-    return self.getNodeByName(structureVolumeName, className=self.master.GetClassName())
-
-  def promptStructure(self):
-    """ask user which label to create"""
-
-    merge = self.mergeVolume()
-    if not merge:
-      return
-    colorNode = merge.GetDisplayNode().GetColorNode()
-
-    if colorNode == "":
-      self.errorDialog( "No color node selected" )
-      return
-
-    if not self.colorBox == "":
-      self.colorBox = ColorBox.ColorBox(colorNode=colorNode)
-      self.colorBox.selectCommand = self.addStructure
-    else:
-      self.colorBox.colorNode = colorNode
-      self.colorBox.parent.populate()
-      self.colorBox.parent.show()
-      self.colorBox.parent.raise_()
-
-  def addStructure(self,label=None, options=""):
-    """create the segmentation helper box"""
-
-    merge = self.mergeVolume()
-    if not merge:
-      return
-
-    if not label:
-      # if no label given, prompt the user.  The selectCommand of the colorBox will
-      # then re-invoke this method with the label value set and we will continue
-      label = self.promptStructure()
-      return
-
-    colorNode = merge.GetDisplayNode().GetColorNode()
-    labelName = colorNode.GetColorName( label )
-    structureName = self.master.GetName()+"-%s-label"%labelName
-
-    if labelName not in self.structureLabelNames:
-      struct = self.volumesLogic.CreateAndAddLabelVolume( slicer.mrmlScene, self.master, structureName )
-      struct.SetName(structureName)
-      struct.GetDisplayNode().SetAndObserveColorNodeID( colorNode.GetID() )
-      self.updateStructures()
-
-    if options.find("noEdit") < 0:
-      self.selectStructure(self.structures.rowCount()-1)
-      
-  
-  def selectStructure(self, idx):
-    """programmatically select the specified structure"""
-    selectionModel = self.structuresView.selectionModel()
-    selectionModel.select(qt.QItemSelection(self.structures.index(idx,0), 
-                                            self.structures.index(idx,4)), 
-                                            selectionModel.ClearAndSelect)
-    selectionModel.setCurrentIndex(self.structures.index(idx,0), selectionModel.NoUpdate)
-    self.structuresView.activated(self.structures.index(idx,0))
-    
-    
-  def deleteSelectedStructure(self, confirm=True):
-    """delete the currently selected structure"""
-
-    merge = self.mergeVolume()
-    if not merge:
-      return
-
-    selectionModel = self.structuresView.selectionModel()
-    selected = selectionModel.currentIndex().row()
-
-    if selected >= 0:
-
-      structureName = self.structures.item(selected,2).text()
-      labelNode = slicer.util.getNode(self.structures.item(selected,3).text())
-
-      if confirm:
-        if not self.confirmDialog( "Delete \'%s\' volume?" % structureName ):
-          return
-
-      slicer.mrmlScene.SaveStateForUndo()
-
-      slicer.mrmlScene.RemoveNode( labelNode )
-      self.updateStructures()
-      if self.structures.rowCount() > 0:
-        self.selectStructure((selected-1) if (selected-1 >= 0) else 0)
-      else:
-        self.select()
-        self.edit(0)
-    
-
-  def deleteStructures(self, confirm=True):
-    """delete all the structures"""
-
-    #
-    # iterate through structures and delete them
-    #
-    merge = self.mergeVolume()
-    if not merge:
-      return
-
-    rows = self.structures.rowCount()
-
-    if confirm:
-      if not self.confirmDialog( "Delete %d structure volume(s)?" % rows ):
-        return
-
-    slicer.mrmlScene.SaveStateForUndo()
-
-    volumeNodes = self.structureVolumes()
-    for volumeNode in volumeNodes:
-      slicer.mrmlScene.RemoveNode( volumeNode )
-    self.updateStructures()
-    self.select()
-    self.edit(0)
-
-  def mergeStructures(self,label="all"):
-    """merge the named or all structure labels into the master label"""
-
-    merge = self.mergeVolume()
-    if not merge:
-      return
-
-    rows = self.structures.rowCount()
-
-    # check that structures are all the same size as the merge volume
-    dims = merge.GetImageData().GetDimensions()
-    for row in xrange(rows):
-      structureName = self.structures.item(row,2).text()
-      structureVolume = self.structureVolume( structureName )
-      if not structureVolume:
-        mergeName = merge.GetName()
-        self.errorDialog( "Merge Aborted: No image data for volume node %s."%(structureName) )
-        return
-      if structureVolume.GetImageData().GetDimensions() != dims:
-        mergeName = merge.GetName()
-        self.errorDialog( "Merge Aborted: Volume %s does not have the same dimensions as the target merge volume.  Use the Resample Scalar/Vector/DWI module to resample.  Use %s as the Reference Volume and select Nearest Neighbor (nn) Interpolation Type."%(structureName,mergeName) )
-        return
-
-    # check that user really wants to merge
-    rows = self.structures.rowCount()
-    for row in xrange(rows):
-      structureName = self.structures.item(row,2).text()
-      structureVolume = self.structureVolume( structureName)
-      if structureVolume.GetImageData().GetMTime() < merge.GetImageData().GetMTime():
-        mergeName = merge.GetName()
-        self.errorDialog( "Note: Merge volume has been modified more recently than structure volumes.\nCreating backup copy as %s-backup"%mergeName )
-        self.volumesLogic.CloneVolume( slicer.mrmlScene, merge, mergeName+"-backup" )
-
-    #
-    # find the Image Label Combine
-    # - call Enter to be sure GUI has been built
-    #
-    combiner = slicer.vtkImageLabelCombine()
-
-    #
-    # iterate through structures merging into merge volume
-    #
-    for row in xrange(rows):
-      structureName = self.structures.item(row,2).text()
-      structureVolume = self.structureVolume( structureName )
-
-      if row == 0:
-        # first row, just copy into merge volume
-        merge.GetImageData().DeepCopy( structureVolume.GetImageData() )
-        continue
-
-      if vtk.VTK_MAJOR_VERSION <= 5:
-        combiner.SetInput1( merge.GetImageData() )
-        combiner.SetInput2( structureVolume.GetImageData() )
-      else:
-        combiner.SetInputConnection(0, merge.GetImageDataConnection() )
-        combiner.SetInputConnection(1, structureVolume.GetImageDataConnection() )
-      self.statusText( "Merging %s" % structureName )
-      combiner.Update()
-      merge.GetImageData().DeepCopy( combiner.GetOutput() )
-
-    # mark all volumes as modified so we will be able to tell if the
-    # merged volume gets edited after these
-    for row in xrange(rows):
-      structureName = self.structures.item(row,2).text()
-      structureVolume = self.structureVolume( structureName )
-      structureVolume.GetImageData().Modified()
-
-    selectionNode = self.applicationLogic.GetSelectionNode()
-    selectionNode.SetReferenceActiveVolumeID( self.master.GetID() )
-    selectionNode.SetReferenceActiveLabelVolumeID( merge.GetID() )
-    self.propagateVolumeSelection()
-
-    self.statusText( "Finished merging." )
-
-  def split(self):
-    """split the merge volume into individual structures"""
-
-    self.statusText( "Splitting..." )
-    merge = self.mergeVolume()
-    if not merge:
-      return
-    colorNode = merge.GetDisplayNode().GetColorNode()
-
-    accum = vtk.vtkImageAccumulate()
-    if vtk.VTK_MAJOR_VERSION <= 5:
-      accum.SetInput(merge.GetImageData())
-    else:
-      accum.SetInputConnection(merge.GetImageDataConnection())
-    accum.Update()
-    lo = int(accum.GetMin()[0])
-    hi = int(accum.GetMax()[0])
-
-    # TODO: pending resolution of bug 1822, run the thresholding
-    # in single threaded mode to avoid data corruption observed on mac release
-    # builds
-    thresholder = vtk.vtkImageThreshold()
-    thresholder.SetNumberOfThreads(1)
-    for i in xrange(lo,hi+1):
-      self.statusText( "Splitting label %d..."%i )
-      if vtk.VTK_MAJOR_VERSION <= 5:
-        thresholder.SetInput( merge.GetImageData() )
-      else:
-        thresholder.SetInputConnection( merge.GetImageDataConnection() )
-      thresholder.SetInValue( i )
-      thresholder.SetOutValue( 0 )
-      thresholder.ReplaceInOn()
-      thresholder.ReplaceOutOn()
-      thresholder.ThresholdBetween( i, i )
-      thresholder.SetOutputScalarType( merge.GetImageData().GetScalarType() )
-      thresholder.Update()
-      if thresholder.GetOutput().GetScalarRange() != (0.0, 0.0):
-        labelName = colorNode.GetColorName(i)
-        self.statusText( "Creating structure volume %s..."%labelName )
-        structureVolume = self.structureVolume( labelName )
-        if not structureVolume:
-          self.addStructure( i, "noEdit" )
-        structureVolume = self.structureVolume( labelName )
-        structureVolume.GetImageData().DeepCopy( thresholder.GetOutput() )
-        self.editUtil.markVolumeNodeAsModified(structureVolume)
-
-    self.statusText( "Finished splitting." )
-
-  def build(self):
-    """make models of current merge volume"""
-
-    #
-    # get the image data for the label layer
-    #
-
-    self.statusText( "Building..." )
-    merge = self.mergeVolume()
-    if not merge:
-      return
-
-    #
-    # create a model using the command line module
-    # based on the current editor parameters
-    #
-
-    parameters = {}
-    parameters["InputVolume"] = merge.GetID()
-    parameters['FilterType'] = "Sinc"
-    parameters['GenerateAll'] = True
-
-    # not needed: setting StartLabel and EndLabel instead
-    #parameters['Labels'] = self.getPaintLabel()
-
-    parameters["JointSmoothing"] = True
-    parameters["SplitNormals"] = True
-    parameters["PointNormals"] = True
-    parameters["SkipUnNamed"] = True
-
-    # create models for all labels
-    parameters["StartLabel"] = -1
-    parameters["EndLabel"] = -1
-
-    parameters["Decimate"] = 0.25
-    parameters["Smooth"] = 10
-
-    #
-    # output
-    # - make a new hierarchy node if needed
-    #
-    numNodes = slicer.mrmlScene.GetNumberOfNodesByClass( "vtkMRMLModelHierarchyNode" )
-    outHierarchy = None
-    for n in xrange(numNodes):
-      node = slicer.mrmlScene.GetNthNodeByClass( n, "vtkMRMLModelHierarchyNode" )
-      if node.GetName() == "Editor Models":
-        outHierarchy = node
-        break
-
-    if outHierarchy and self.replaceModels.checked and numNodes > 0:
-      # user wants to delete any existing models, so take down hierarchy and
-      # delete the model nodes
-      rr = range(numNodes)
-      rr.reverse()
-      for n in rr:
-        node = slicer.mrmlScene.GetNthNodeByClass( n, "vtkMRMLModelHierarchyNode" )
-        if node.GetParentNodeID() == outHierarchy.GetID():
-          slicer.mrmlScene.RemoveNode( node.GetModelNode() )
-          slicer.mrmlScene.RemoveNode( node )
-
-    if not outHierarchy:
-      outHierarchy = slicer.vtkMRMLModelHierarchyNode()
-      outHierarchy.SetScene( slicer.mrmlScene )
-      outHierarchy.SetName( "Editor Models" )
-      slicer.mrmlScene.AddNode( outHierarchy )
-
-    parameters["ModelSceneFile"] = outHierarchy
-
-    try:
-      modelMaker = slicer.modules.modelmaker
-      #
-      # run the task (in the background)
-      # - use the GUI to provide progress feedback
-      # - use the GUI's Logic to invoke the task
-      # - model will show up when the processing is finished
-      #
-      self.CLINode = slicer.cli.run(modelMaker, self.CLINode, parameters)
-      self.statusText( "Model Making Started..." )
-    except AttributeError:
-      qt.QMessageBox.critical(slicer.util.mainWindow(), 'Editor', 'The ModelMaker module is not available<p>Perhaps it was disabled in the application settings or did not load correctly.')
-
-
-  def edit(self,label):
-    """select the picked label for editing"""
-
-    merge = self.mergeVolume()
-    if not merge:
-      return
-    colorNode = merge.GetDisplayNode().GetColorNode()
-
-    structureName = colorNode.GetColorName( label )
-    structureVolume = self.structureVolume( structureName )
-
-    # make the master node the active background, and the structure label node the active label
-    selectionNode = self.applicationLogic.GetSelectionNode()
-    selectionNode.SetReferenceActiveVolumeID(self.master.GetID())
-    if structureVolume:
-      selectionNode.SetReferenceActiveLabelVolumeID( structureVolume.GetID() )
-    self.propagateVolumeSelection()
-
-    self.editUtil.setLabel(label)
-
-  def structureVolumes(self):
-    """return a list of volumeNodes that are per-structure
-    volumes of the current master"""
-    volumeNodes = []
-    masterName = self.master.GetName()
-    slicer.mrmlScene.InitTraversal()
-    vNode = slicer.mrmlScene.GetNextNodeByClass( "vtkMRMLScalarVolumeNode" )
-    self.row = 0
-    while vNode:
-      vName = vNode.GetName()
-      # match something like "CT-lung-label1"
-      fnmatchExp = "%s-*-label*" % masterName
-      if fnmatch.fnmatch(vName,fnmatchExp):
-        volumeNodes.append(vNode)
-      vNode = slicer.mrmlScene.GetNextNodeByClass( "vtkMRMLScalarVolumeNode" )
-    return volumeNodes
-
-  def updateStructures(self,caller=None, event=None):
-    """re-build the Structures frame
-    - optional caller and event ignored (for use as vtk observer callback)
-    """
-
-    if slicer.mrmlScene.IsBatchProcessing():
-      return
-
-    if self.setMergeButton.destroyed():
-      """ TODO: here the python class still exists but the
-      Qt widgets are gone - need to figure out when to remove observers
-      and free python code - probably the destroyed() signal.
-      """
-      self.cleanup()
-      return
-
-    self.setMergeButton.setDisabled(not self.master)
-
-    # reset to a fresh model
-    self.brushes = []
-    self.items = []
-    self.structures = qt.QStandardItemModel()
-    self.structuresView.setModel(self.structures)
-
-    # if no merge volume exists, disable everything - else enable
-    merge = self.mergeVolume()
-    self.addStructureButton.setDisabled(not merge)
-    self.deleteStructuresButton.setDisabled(not merge)
-    self.deleteSelectedStructureButton.setDisabled(not merge)
-    self.mergeButton.setDisabled(not merge)
-    self.splitButton.setDisabled(not merge)
-    self.mergeAndBuildButton.setDisabled(not merge)
-    self.replaceModels.setDisabled(not merge)
-    if self.mergeValidCommand:
-      # will be passed current
-      self.mergeValidCommand(merge)
-
-    if not merge:
-      return
-
-    colorNode = merge.GetDisplayNode().GetColorNode()
-    lut = colorNode.GetLookupTable()
-
-    masterName = self.master.GetName()
-    volumeNodes = self.structureVolumes()
-    for vNode in volumeNodes:
-      vName = vNode.GetName()
-      # figure out what name it is
-      # - account for the fact that sometimes a number will be added to the end of the name
-      start = 1+len(masterName)
-      end = vName.rfind("-label")
-      structureName = vName[start:end]
-      structureIndex = colorNode.GetColorIndexByName( structureName )
-      structureColor = lut.GetTableValue(structureIndex)[0:3]
-      brush = qt.QBrush()
-      self.brushes.append(brush)
-      color = qt.QColor()
-      color.setRgb(structureColor[0]*255,structureColor[1]*255,structureColor[2]*255)
-      brush.setColor(color)
-
-      # label index
-      item = qt.QStandardItem()
-      item.setEditable(False)
-      item.setText( "%03d"%int(structureIndex) )
-      self.structures.setItem(self.row,0,item)
-      self.items.append(item)
-      # label color
-      item = qt.QStandardItem()
-      item.setEditable(False)
-      item.setData(color,1)
-      self.structures.setItem(self.row,1,item)
-      self.items.append(item)
-      # structure name
-      item = qt.QStandardItem()
-      item.setEditable(False)
-      item.setText(structureName)
-      self.structures.setItem(self.row,2,item)
-      self.items.append(item)
-      # volumeName name
-      item = qt.QStandardItem()
-      item.setEditable(False)
-      item.setText(vName)
-      self.structures.setItem(self.row,3,item)
-      self.items.append(item)
-      # sort order
-      item = qt.QStandardItem()
-      item.setEditable(True)
-      item.setText("")
-      self.structures.setItem(self.row,4,item)
-      self.items.append(item)
-      self.row += 1
-
-    for i in range(5):
-      self.structuresView.resizeColumnToContents(i)
-
-    self.structures.setHeaderData(0,1,"Number")
-    self.structures.setHeaderData(1,1,"Color")
-    self.structures.setHeaderData(2,1,"Name")
-    self.structures.setHeaderData(3,1,"Label Volume")
-    self.structures.setHeaderData(4,1,"Order")
-    self.structuresView.setModel(self.structures)
-    self.structuresView.connect("activated(QModelIndex)", self.onStructuresClicked)
-    self.structuresView.setProperty('SH_ItemView_ActivateItemOnSingleClick', 1)
-
-    self.structureLabelNames = []
-    rows = self.structures.rowCount()
-    for row in xrange(rows):
-      self.structureLabelNames.append(self.structures.item(row,2).text())
-
-
-  #
-  # callback helpers (slots)
-  #
-  def onSelect(self, node):
-    self.select()
-
-  def onStructuresClicked(self, modelIndex):
-    self.edit(int(self.structures.item(modelIndex.row(),0).text()))
-
-  def onMergeAndBuild(self):
-    self.mergeStructures()
-    self.build()
-
-
-  def create(self):
-    """create the segmentation helper box"""
-
-    #
-    # Master Frame
-    #
-    self.masterFrame = qt.QFrame(self.parent)
-    self.masterFrame.setLayout(qt.QVBoxLayout())
-    self.parent.layout().addWidget(self.masterFrame)
-
-    #
-    # the master volume selector
-    #
-    self.masterSelectorFrame = qt.QFrame(self.parent)
-    self.masterSelectorFrame.objectName = 'MasterVolumeFrame'
-    self.masterSelectorFrame.setLayout(qt.QHBoxLayout())
-    self.masterFrame.layout().addWidget(self.masterSelectorFrame)
-
-    self.masterSelectorLabel = qt.QLabel("Master Volume: ", self.masterSelectorFrame)
-    self.masterSelectorLabel.setToolTip( "Select the master volume (background grayscale scalar volume node)")
-    self.masterSelectorFrame.layout().addWidget(self.masterSelectorLabel)
-
-    self.masterSelector = slicer.qMRMLNodeComboBox(self.masterSelectorFrame)
-    self.masterSelector.objectName = 'MasterVolumeNodeSelector'
-    # TODO
-    self.masterSelector.nodeTypes = ( ("vtkMRMLScalarVolumeNode"), "" )
-    self.masterSelector.selectNodeUponCreation = False
-    self.masterSelector.addEnabled = False
-    self.masterSelector.removeEnabled = False
-    self.masterSelector.noneEnabled = True
-    self.masterSelector.showHidden = False
-    self.masterSelector.showChildNodeTypes = False
-    self.masterSelector.setMRMLScene( slicer.mrmlScene )
-    # TODO: need to add a QLabel
-    # self.masterSelector.SetLabelText( "Master Volume:" )
-    self.masterSelector.setToolTip( "Pick the master structural volume to define the segmentation.  A label volume with the with \"-label\" appended to the name will be created if it doesn't already exist." )
-    self.masterSelectorFrame.layout().addWidget(self.masterSelector)
-
-
-    #
-    # merge label name and set button
-    #
-    self.mergeFrame = qt.QFrame(self.masterFrame)
-    self.mergeFrame.objectName = 'MergeVolumeFrame'
-    self.mergeFrame.setLayout(qt.QHBoxLayout())
-    self.masterFrame.layout().addWidget(self.mergeFrame)
-
-    mergeNameToolTip = "Composite label map containing the merged structures (be aware that merge operations will overwrite any edits applied to this volume)"
-    self.mergeNameLabel = qt.QLabel("Merge Volume: ", self.mergeFrame)
-    self.mergeNameLabel.setToolTip( mergeNameToolTip )
-    self.mergeFrame.layout().addWidget(self.mergeNameLabel)
-
-    self.mergeName = qt.QLabel("", self.mergeFrame)
-    self.mergeName.setToolTip( mergeNameToolTip )
-    self.mergeFrame.layout().addWidget(self.mergeName)
-
-    self.setMergeButton = qt.QPushButton("Set...", self.mergeFrame)
-    self.setMergeButton.objectName = 'MergeVolumeButton'
-    self.setMergeButton.setToolTip( "Set the merge volume to use with this master." )
-    self.mergeFrame.layout().addWidget(self.setMergeButton)
-
-
-    #
-    # Structures Frame
-    #
-
-    self.structuresFrame = ctk.ctkCollapsibleGroupBox(self.masterFrame)
-    self.structuresFrame.objectName = 'PerStructureVolumesFrame'
-    self.structuresFrame.title = "Per-Structure Volumes"
-    self.structuresFrame.collapsed = True
-    self.structuresFrame.setLayout(qt.QVBoxLayout())
-    self.masterFrame.layout().addWidget(self.structuresFrame)
-
-    # buttons frame
-
-    self.structureButtonsFrame = qt.QFrame(self.structuresFrame)
-    self.structureButtonsFrame.objectName = 'ButtonsFrame'
-    self.structureButtonsFrame.setLayout(qt.QHBoxLayout())
-    self.structuresFrame.layout().addWidget(self.structureButtonsFrame)
-
-    # add button
-
-    self.addStructureButton = qt.QPushButton("Add Structure", self.structureButtonsFrame)
-    self.addStructureButton.objectName = 'AddStructureButton'
-    self.addStructureButton.setToolTip( "Add a label volume for a structure to edit" )
-    self.structureButtonsFrame.layout().addWidget(self.addStructureButton)
-
-    # split button
-
-    self.splitButton = qt.QPushButton("Split Merge Volume", self.structuresFrame)
-    self.splitButton.objectName = 'SplitStructureButton'
-    self.splitButton.setToolTip( "Split distinct labels from merge volume into new volumes" )
-    self.structureButtonsFrame.layout().addWidget(self.splitButton)
-
-    # structures view
-
-    self.structuresView = qt.QTreeView()
-    self.structuresView.objectName = 'StructuresView'
-    self.structuresView.sortingEnabled = True
-    self.structuresFrame.layout().addWidget(self.structuresView)
-
-    # all buttons frame
-
-    self.allButtonsFrame = qt.QFrame(self.structuresFrame)
-    self.allButtonsFrame.objectName = 'AllButtonsFrameButton'
-    self.allButtonsFrame.setLayout(qt.QHBoxLayout())
-    self.structuresFrame.layout().addWidget(self.allButtonsFrame)
-
-    # delete all structures button
-
-    self.deleteStructuresButton = qt.QPushButton("Delete All", self.allButtonsFrame)
-    self.deleteStructuresButton.objectName = 'DeleteStructureButton'
-    self.deleteStructuresButton.setToolTip( "Delete all the structure volumes from the scene.\n\nNote: to delete individual structure volumes, use the Data Module." )
-    self.allButtonsFrame.layout().addWidget(self.deleteStructuresButton)
-
-    # delete selected structures button
-
-    self.deleteSelectedStructureButton = qt.QPushButton("Delete Selected", self.allButtonsFrame)
-    self.deleteSelectedStructureButton.objectName = 'DeleteSelectedStructureButton'
-    self.deleteSelectedStructureButton.setToolTip( "Delete the selected structure volume from the scene." )
-    self.allButtonsFrame.layout().addWidget(self.deleteSelectedStructureButton)
-
-    # merge button
-
-    self.mergeButton = qt.QPushButton("Merge All", self.allButtonsFrame)
-    self.mergeButton.objectName = 'MergeAllStructuresButton'
-    self.mergeButton.setToolTip( "Merge all structures into Merge Volume" )
-    self.allButtonsFrame.layout().addWidget(self.mergeButton)
-
-    # merge and build button
-
-    self.mergeAndBuildButton = qt.QPushButton("Merge And Build", self.allButtonsFrame)
-    self.mergeAndBuildButton.objectName = 'MergeStructuresAndBuildModelsButton'
-    self.mergeAndBuildButton.setToolTip( "Merge all structures into Merge Volume and build models from all structures")
-    self.allButtonsFrame.layout().addWidget(self.mergeAndBuildButton)
-    # options frame
-
-    self.optionsFrame = qt.QFrame(self.structuresFrame)
-    self.optionsFrame.objectName = 'OptionsFrame'
-    self.optionsFrame.setLayout(qt.QHBoxLayout())
-    self.structuresFrame.layout().addWidget(self.optionsFrame)
-
-    # replace models button
-
-    self.replaceModels = qt.QCheckBox("Replace Models", self.optionsFrame)
-    self.replaceModels.objectName = 'ReplaceModelsCheckBox'
-    self.replaceModels.setToolTip( "Replace any existing models when building" )
-    self.replaceModels.setChecked(1)
-    self.optionsFrame.layout().addWidget(self.replaceModels)
-
-    #
-    # signals, slots, and observers
-    #
-
-    # signals/slots on qt widgets are automatically when
-    # this class destructs, but observers of the scene must be explicitly
-    # removed in the destuctor
-
-    # node selected
-    self.masterSelector.connect("currentNodeChanged(vtkMRMLNode*)", self.onSelect)
-    # buttons pressed
-    self.addStructureButton.connect("clicked()", self.addStructure)
-    self.deleteStructuresButton.connect("clicked()", self.deleteStructures)
-    self.deleteSelectedStructureButton.connect("clicked()", self.deleteSelectedStructure)
-    # selection changed event
-    # invoked event
-    self.splitButton.connect("clicked()", self.split)
-    self.mergeButton.connect("clicked()", self.mergeStructures)
-    self.mergeAndBuildButton.connect("clicked()", self.onMergeAndBuild)
-    self.setMergeButton.connect("clicked()", self.labelSelectDialog)
-
-    # so buttons will initially be disabled
-    self.master = None
-    self.updateStructures()
-
-  def colorSelectDialog(self):
-    """color table dialog"""
-
-    if not self.colorSelect:
-      self.colorSelect = qt.QDialog(slicer.util.mainWindow())
-      self.colorSelect.objectName = 'EditorColorSelectDialog'
-      self.colorSelect.setLayout( qt.QVBoxLayout() )
+  def labelCreateDialog(self):
+    """label create dialog"""
+
+    if not self.labelCreate:
+      self.labelCreate = qt.QDialog(slicer.util.mainWindow())
+      self.labelCreate.objectName = 'EditorLabelCreateDialog'
+      self.labelCreate.setLayout( qt.QVBoxLayout() )
 
       self.colorPromptLabel = qt.QLabel()
-      self.colorSelect.layout().addWidget( self.colorPromptLabel )
+      self.labelCreate.layout().addWidget( self.colorPromptLabel )
 
-      self.colorSelectorFrame = qt.QFrame()
-      self.colorSelectorFrame.objectName = 'ColorSelectorFrame'
-      self.colorSelectorFrame.setLayout( qt.QHBoxLayout() )
-      self.colorSelect.layout().addWidget( self.colorSelectorFrame )
+      self.mergeTypeSelectorFrame = qt.QFrame()
+      self.mergeTypeSelectorFrame.objectName = 'MergeTypeSelectorFrame'
+      self.mergeTypeSelectorFrame.setLayout( qt.QVBoxLayout() )
+      self.labelCreate.layout().addWidget( self.mergeTypeSelectorFrame )
 
-      self.colorSelectorLabel = qt.QLabel()
-      self.colorPromptLabel.setText( "Color Table: " )
-      self.colorSelectorFrame.layout().addWidget( self.colorSelectorLabel )
+      self.nodeTypeLabel = qt.QLabel()
+      self.nodeTypeLabel.text = 'Create a node of type'
+      self.mergeTypeSelectorFrame.layout().addWidget( self.nodeTypeLabel )
+      self.segmentationRadioButton = qt.QRadioButton('segmentation')
+      self.labelMapRadioButton = qt.QRadioButton('label map volume')
+      self.mergeTypeSelectorFrame.layout().addWidget(self.segmentationRadioButton)
+      self.mergeTypeSelectorFrame.layout().addWidget(self.labelMapRadioButton)
+      self.mergeNodeNameLabel = qt.QLabel()
+      self.mergeTypeSelectorFrame.layout().addWidget( self.mergeNodeNameLabel )
+      self.segmentationRadioButton.connect("toggled(bool)", self.onMergeTypeChanged)
+      self.segmentationRadioButton.checked = True
 
-      self.colorSelector = slicer.qMRMLColorTableComboBox()
+      self.colorTableSelectorFrame = qt.QFrame()
+      self.colorTableSelectorFrame.objectName = 'ColorSelectorFrame'
+      self.colorTableSelectorFrame.setLayout( qt.QHBoxLayout() )
+      self.labelCreate.layout().addWidget( self.colorTableSelectorFrame )
+
+      self.labelCreatorLabel = qt.QLabel()
+      self.labelCreatorLabel.setText( "Color Table: " )
+      self.colorTableSelectorFrame.layout().addWidget( self.labelCreatorLabel )
+
+      self.labelCreator = slicer.qMRMLColorTableComboBox()
       # TODO
-      self.colorSelector.nodeTypes = ("vtkMRMLColorNode", "")
-      self.colorSelector.hideChildNodeTypes = ("vtkMRMLDiffusionTensorDisplayPropertiesNode", "vtkMRMLProceduralColorNode", "")
-      self.colorSelector.addEnabled = False
-      self.colorSelector.removeEnabled = False
-      self.colorSelector.noneEnabled = False
-      self.colorSelector.selectNodeUponCreation = True
-      self.colorSelector.showHidden = True
-      self.colorSelector.showChildNodeTypes = True
-      self.colorSelector.setMRMLScene( slicer.mrmlScene )
-      self.colorSelector.setToolTip( "Pick the table of structures you wish to edit" )
-      self.colorSelect.layout().addWidget( self.colorSelector )
+      self.labelCreator.nodeTypes = ("vtkMRMLColorNode", "")
+      self.labelCreator.hideChildNodeTypes = ("vtkMRMLDiffusionTensorDisplayPropertiesNode", "vtkMRMLProceduralColorNode", "")
+      self.labelCreator.addEnabled = False
+      self.labelCreator.removeEnabled = False
+      self.labelCreator.noneEnabled = False
+      self.labelCreator.selectNodeUponCreation = True
+      self.labelCreator.showHidden = True
+      self.labelCreator.showChildNodeTypes = True
+      self.labelCreator.setMRMLScene( slicer.mrmlScene )
+      self.labelCreator.setToolTip( "Pick the table of structures you wish to edit" )
+      self.labelCreate.layout().addWidget( self.labelCreator )
 
       self.colorButtonFrame = qt.QFrame()
       self.colorButtonFrame.objectName = 'ColorButtonFrame'
       self.colorButtonFrame.setLayout( qt.QHBoxLayout() )
-      self.colorSelect.layout().addWidget( self.colorButtonFrame )
+      self.labelCreate.layout().addWidget( self.colorButtonFrame )
 
-      self.colorDialogApply = qt.QPushButton("Apply", self.colorButtonFrame)
-      self.colorDialogApply.objectName = 'ColorDialogApply'
-      self.colorDialogApply.setToolTip( "Use currently selected color node." )
-      self.colorButtonFrame.layout().addWidget(self.colorDialogApply)
+      self.labelCreateDialogApply = qt.QPushButton("Apply", self.colorButtonFrame)
+      self.labelCreateDialogApply.objectName = 'LabelCreateDialogApply'
+      self.labelCreateDialogApply.setToolTip( "Use currently selected color node." )
+      self.colorButtonFrame.layout().addWidget(self.labelCreateDialogApply)
 
-      self.colorDialogCancel = qt.QPushButton("Cancel", self.colorButtonFrame)
-      self.colorDialogCancel.objectName = 'ColorDialogCancel'
-      self.colorDialogCancel.setToolTip( "Cancel current operation." )
-      self.colorButtonFrame.layout().addWidget(self.colorDialogCancel)
+      self.labelCreateDialogCancel = qt.QPushButton("Cancel", self.colorButtonFrame)
+      self.labelCreateDialogCancel.objectName = 'LabelCreateDialogCancel'
+      self.labelCreateDialogCancel.setToolTip( "Cancel current operation." )
+      self.colorButtonFrame.layout().addWidget(self.labelCreateDialogCancel)
 
-      self.colorDialogApply.connect("clicked()", self.onColorDialogApply)
-      self.colorDialogCancel.connect("clicked()", self.colorSelect.hide)
+      self.labelCreateDialogApply.connect("clicked()", self.onLabelCreateDialogApply)
+      self.labelCreateDialogCancel.connect("clicked()", self.labelCreate.hide)
 
     # pick the default editor LUT for the user
     defaultID = self.colorLogic.GetDefaultEditorColorNodeID()
     defaultNode = slicer.mrmlScene.GetNodeByID(defaultID)
     if defaultNode:
-      self.colorSelector.setCurrentNode( defaultNode )
+      self.labelCreator.setCurrentNode( defaultNode )
 
+    self.colorPromptLabel.text = "Create a merge label map or a segmentation for selected master volume %s.\nSelect the color table node that will be used for segmentation labels." %(self.master.GetName())
+    self.labelCreate.show()
 
-    self.colorPromptLabel.setText( "Create a merge label map for selected master volume %s.\nNew volume will be %s.\nSelect the color table node that will be used for segmentation labels." %(self.master.GetName(), self.master.GetName()+"-label"))
-    self.colorSelect.show()
+  def onMergeTypeChanged(self, state):
+    if state == True:
+      self.mergeNodeName = self.master.GetName() + self.segmentationPostfix
+    else:
+      self.mergeNodeName = self.master.GetName() + self.mergeVolumePostfix
+    self.mergeNodeNameLabel.text = 'named %s' % (self.mergeNodeName)
 
   # colorSelect callback (slot)
-  def onColorDialogApply(self):
+  def onLabelCreateDialogApply(self):
     self.createMerge()
-    self.colorSelect.hide()
+    self.labelCreate.hide()
 
   def labelSelectDialog(self):
     """label table dialog"""
@@ -952,7 +316,6 @@ class HelperBox(object):
 
       self.labelSelector = slicer.qMRMLNodeComboBox()
       self.labelSelector.nodeTypes = ( "vtkMRMLLabelMapVolumeNode", "" )
-      # todo addAttribute
       self.labelSelector.selectNodeUponCreation = False
       self.labelSelector.addEnabled = False
       self.labelSelector.noneEnabled = False
@@ -960,7 +323,7 @@ class HelperBox(object):
       self.labelSelector.showHidden = False
       self.labelSelector.showChildNodeTypes = False
       self.labelSelector.setMRMLScene( slicer.mrmlScene )
-      self.labelSelector.setToolTip( "Pick the label map to edit" )
+      self.labelSelector.setToolTip( "Pick the label map or segmentation to edit" )
       self.labelSelectorFrame.layout().addWidget( self.labelSelector )
 
       self.labelButtonFrame = qt.QFrame()
@@ -968,7 +331,7 @@ class HelperBox(object):
       self.labelSelect.layout().addWidget( self.labelButtonFrame )
 
       self.labelDialogApply = qt.QPushButton("Apply", self.labelButtonFrame)
-      self.labelDialogApply.setToolTip( "Use currently selected label node." )
+      self.labelDialogApply.setToolTip( "Use currently selected label or segmentation node." )
       self.labelButtonFrame.layout().addWidget(self.labelDialogApply)
 
       self.labelDialogCancel = qt.QPushButton("Cancel", self.labelButtonFrame)
@@ -994,6 +357,7 @@ class HelperBox(object):
   def onLabelDialogApply(self):
     self.setMergeVolume(self.labelSelector.currentNode())
     self.labelSelect.hide()
+
   def onLabelDialogCreate(self):
     self.newMerge()
     self.labelSelect.hide()

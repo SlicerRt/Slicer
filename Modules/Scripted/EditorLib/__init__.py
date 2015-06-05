@@ -9,6 +9,8 @@ from EditColor import *
 from EditOptions import *
 from EditUtil import *
 from HelperBox import *
+from MergeLabelMapBox import *
+from SegmentationBox import *
 from Effect import *
 from LabelEffect import *
 from PaintEffect import *
